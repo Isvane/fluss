@@ -3,7 +3,7 @@ module github.com/Isvane/fluss
 go 1.26.6
 
 require (
-	github.com/IBM/sarama v1.60.1 // indirect
+	github.com/IBM/sarama v1.60.1
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/eapache/go-resiliency v1.7.0 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
