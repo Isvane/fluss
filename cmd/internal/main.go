@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -79,7 +80,63 @@ func createProducer(broker string) (sarama.AsyncProducer, error) {
 	return producer, nil
 }
 
+type Consumer struct{}
+
+func (c *Consumer) Setup(sarama.ConsumerGroupSession) error {
+	return nil
+}
+
+func (c *Consumer) Cleanup(sarama.ConsumerGroupSession) error {
+	return nil
+}
+
+func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	for {
+		select {
+		case message, ok := <-claim.Messages():
+			if !ok {
+				return nil
+			}
+
+			fmt.Printf("Claimed: value = %s, timestamp = %v, topic = %s\n", string(message.Value), message.Timestamp, message.Topic)
+			session.MarkMessage(message, "")
+			session.Commit()
+		case <-session.Context().Done():
+			return nil
+		}
+	}
+}
+
+func startConsumer(ctx context.Context, broker string, group string, topics []string) (sarama.ConsumerGroup, error) {
+	config := sarama.NewConfig()
+	config.Consumer.Offsets.Initial = sarama.OffsetOldest
+
+	client, err := sarama.NewConsumerGroup([]string{broker}, group, config)
+	if err != nil {
+		return nil, fmt.Errorf("error creating consumer group client: %w", err)
+	}
+
+	consumer := Consumer{}
+
+	go func() {
+		for {
+			if err := client.Consume(ctx, topics, &consumer); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				log.Printf("Error from consumer: %v\n", err)
+			}
+			if ctx.Err() != nil {
+				return
+			}
+		}
+	}()
+
+	return client, nil
+}
+
 func main() {
+	group := "pokemon-fans"
 	broker := os.Getenv("BROKER")
 	if broker == "" {
 		broker = "kafka:9092"
@@ -98,9 +155,21 @@ func main() {
 	}
 	defer producer.AsyncClose()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	consumerGroup, err := startConsumer(ctx, broker, group, []string{"Pokemon"})
+	if err != nil {
+		log.Fatalf("Consumer error: %v", err)
+	}
+	defer consumerGroup.Close()
+
+	log.Println("Sarama consumer up and running...")
+
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigchan
 
 	fmt.Println("Shutting down...")
+	cancel()
 }
