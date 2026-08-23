@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,7 +17,7 @@ func createTopic(broker string, topicName string, partitions int32, replicationF
 
 	admin, err := sarama.NewClusterAdmin([]string{broker}, config)
 	if err != nil {
-		return fmt.Errorf("Failed to create cluster admin: %w", err)
+		return fmt.Errorf("failed to create cluster admin: %w", err)
 	}
 	defer admin.Close()
 
@@ -29,12 +29,12 @@ func createTopic(broker string, topicName string, partitions int32, replicationF
 	err = admin.CreateTopic(topicName, topicDetail, false)
 	if err != nil {
 		if err == sarama.ErrTopicAlreadyExists {
-			fmt.Printf("Topic %q already exist\n", topicName)
+			slog.Info("Topic already exists", slog.String("topic", topicName))
 			return nil
 		}
-		return fmt.Errorf("Failed to create topic: %w", err)
+		return fmt.Errorf("failed to create topic: %w", err)
 	}
-	fmt.Printf("Topic %q created successfully\n", topicName)
+	slog.Info("Topic created successfully", slog.String("topic", topicName))
 	return nil
 }
 
@@ -47,18 +47,23 @@ func createProducer(broker string) (sarama.AsyncProducer, error) {
 
 	producer, err := sarama.NewAsyncProducer([]string{broker}, config)
 	if err != nil {
-		log.Fatalf("Error creating producer: %v", err)
+		slog.Error("Error creating producer", slog.Any("error", err))
+		os.Exit(1)
 	}
 
 	go func() {
 		for msg := range producer.Successes() {
-			fmt.Printf("[SUCCESS] Message sent to topic %s [partition: %d, offset: %d]\n", msg.Topic, msg.Partition, msg.Offset)
+			slog.Info("Message sent successfully",
+				slog.String("topic", msg.Topic),
+				slog.Int("partition", int(msg.Partition)),
+				slog.Int64("offset", msg.Offset),
+			)
 		}
 	}()
 
 	go func() {
 		for err := range producer.Errors() {
-			log.Printf("[ERROR] Failed to send message: %v\n", err)
+			slog.Error("Failed to send message", slog.Any("error", err))
 		}
 	}()
 
@@ -72,7 +77,7 @@ func createProducer(broker string) (sarama.AsyncProducer, error) {
 			}
 
 			producer.Input() <- msg
-			fmt.Printf("Pushed %s to producer channel\n", pokemon)
+			slog.Info("Pushed to producer channel", slog.String("msg", pokemon))
 			time.Sleep(500 * time.Millisecond)
 		}
 	}()
@@ -98,7 +103,12 @@ func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 				return nil
 			}
 
-			fmt.Printf("Claimed: value = %s, timestamp = %v, topic = %s\n", string(message.Value), message.Timestamp, message.Topic)
+			slog.Info("Message claimed",
+				slog.String("topic", message.Topic),
+				slog.Int("partition", int(message.Partition)),
+				slog.Any("offset", message.Offset),
+			)
+
 			session.MarkMessage(message, "")
 			session.Commit()
 		case <-session.Context().Done():
@@ -113,6 +123,7 @@ func startConsumer(ctx context.Context, broker string, group string, topics []st
 
 	client, err := sarama.NewConsumerGroup([]string{broker}, group, config)
 	if err != nil {
+		slog.Error("Error creating consumer group client", slog.Any("error", err))
 		return nil, fmt.Errorf("error creating consumer group client: %w", err)
 	}
 
@@ -124,7 +135,7 @@ func startConsumer(ctx context.Context, broker string, group string, topics []st
 				if ctx.Err() != nil {
 					return
 				}
-				log.Printf("Error from consumer: %v\n", err)
+				slog.Error("Error from consumer", slog.Any("error", err))
 			}
 			if ctx.Err() != nil {
 				return
@@ -142,16 +153,17 @@ func main() {
 		broker = "kafka:9092"
 	}
 
-	fmt.Printf("Configured to connect to Kafka at: %s\n", broker)
+	slog.Info("Configured to connect to Kafka", slog.String("broker", broker))
 	time.Sleep(10 * time.Second)
 
 	if err := createTopic(broker, "Pokemon", 1, 1); err != nil {
-		log.Printf("Error creating topic: %v\n", err)
+		slog.Error("Error creating topic", slog.Any("error", err))
 	}
 
 	producer, err := createProducer(broker)
 	if err != nil {
-		log.Fatalf("Producer error: %v", err)
+		slog.Error("Producer error", slog.Any("error", err))
+		os.Exit(1)
 	}
 	defer producer.AsyncClose()
 
@@ -160,16 +172,17 @@ func main() {
 
 	consumerGroup, err := startConsumer(ctx, broker, group, []string{"Pokemon"})
 	if err != nil {
-		log.Fatalf("Consumer error: %v", err)
+		slog.Error("Consumer error", slog.Any("error", err))
+		os.Exit(1)
 	}
 	defer consumerGroup.Close()
 
-	log.Println("Sarama consumer up and running...")
+	slog.Info("Sarama consumer up and running...")
 
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigchan
 
-	fmt.Println("Shutting down...")
+	slog.Info("Shutting down...")
 	cancel()
 }
