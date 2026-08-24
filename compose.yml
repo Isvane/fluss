@@ -19,6 +19,8 @@ services:
     container_name: fluss
     environment:
       - KAFKA_BROKER=kafka:9092
+    stdin_open: true
+    tty: true
     depends_on:
       - kafka
     restart: unless-stopped

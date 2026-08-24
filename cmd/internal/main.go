@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
@@ -64,21 +65,6 @@ func createProducer(broker string) (sarama.AsyncProducer, error) {
 	go func() {
 		for err := range producer.Errors() {
 			slog.Error("Failed to send message", slog.Any("error", err))
-		}
-	}()
-
-	messages := []string{"Staryu evolved into Starmie!"}
-
-	go func() {
-		for _, pokemon := range messages {
-			msg := &sarama.ProducerMessage{
-				Topic: "Pokemon",
-				Value: sarama.StringEncoder(pokemon),
-			}
-
-			producer.Input() <- msg
-			slog.Info("Pushed to producer channel", slog.String("msg", pokemon))
-			time.Sleep(500 * time.Millisecond)
 		}
 	}()
 
@@ -180,6 +166,43 @@ func main() {
 	slog.Info("Sarama consumer up and running...")
 
 	sigchan := make(chan os.Signal, 1)
+
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		fmt.Println("Enter message (or type 'quit' to exit): ")
+		os.Stdout.Sync()
+
+		for scanner.Scan() {
+			input := scanner.Text()
+
+			if input == "" {
+				fmt.Print("Enter message: ")
+				os.Stdout.Sync()
+				continue
+			}
+
+			if input == "quit" || input == "exit" {
+				sigchan <- syscall.SIGINT
+				return
+			}
+
+			msg := &sarama.ProducerMessage{
+				Topic: "Pokemon",
+				Value: sarama.StringEncoder(input),
+			}
+
+			producer.Input() <- msg
+			slog.Info("Pushed to channel", slog.String("msg", input))
+
+			fmt.Println("Enter message: ")
+			os.Stdout.Sync()
+		}
+
+		if err := scanner.Err(); err != nil {
+			fmt.Fprintln(os.Stderr, "Failed to read input:", err)
+		}
+	}()
+
 	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigchan
 
