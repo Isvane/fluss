@@ -1,18 +1,29 @@
 FROM golang:1.26.6-alpine AS builder
 
 WORKDIR /app
+RUN apk add --no-cache ca-certificates tzdata
 
-RUN apk add --no-cache git
 COPY go.mod go.sum* ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./cmd/internal
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates tzdata
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" \
+    -o main ./cmd/internal
 
-WORKDIR /root/
+FROM scratch
+
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+
+WORKDIR /
 
 COPY --from=builder /app/main .
-CMD ["./main"]
+
+USER 65534:65534
+
+ENTRYPOINT ["./main"]
