@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -185,8 +186,11 @@ func main() {
 				return
 			}
 
+			key := extractKey(input)
+
 			msg := &sarama.ProducerMessage{
 				Topic: "Pokemon",
+				Key:   key,
 				Value: sarama.StringEncoder(input),
 			}
 
@@ -207,4 +211,17 @@ func main() {
 
 	slog.Info("Shutting down...")
 	cancel()
+}
+
+func extractKey(input string) sarama.Encoder {
+	var knownKeys = []string{"pikachu", "charizard", "bulbasaur", "squirtle"}
+
+	lower := strings.ToLower(input)
+	for _, key := range knownKeys {
+		if strings.Contains(lower, key) {
+			return sarama.StringEncoder(key)
+		}
+	}
+
+	return nil
 }
