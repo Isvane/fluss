@@ -96,7 +96,6 @@ func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 			)
 
 			session.MarkMessage(message, "")
-			session.Commit()
 		case <-session.Context().Done():
 			return nil
 		}
