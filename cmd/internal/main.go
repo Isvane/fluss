@@ -45,7 +45,9 @@ func createProducer(broker string) (sarama.AsyncProducer, error) {
 
 	config.Producer.Return.Successes = true
 	config.Producer.Return.Errors = true
+	config.Producer.Idempotent = true
 	config.Producer.RequiredAcks = sarama.WaitForAll
+	config.Net.MaxOpenRequests = 1
 
 	producer, err := sarama.NewAsyncProducer([]string{broker}, config)
 	if err != nil {
@@ -142,7 +144,7 @@ func main() {
 	slog.Info("Configured to connect to Kafka", slog.String("broker", broker))
 	time.Sleep(10 * time.Second)
 
-	if err := createTopic(broker, "Pokemon", 1, 1); err != nil {
+	if err := createTopic(broker, "Pokemon", 3, 1); err != nil {
 		slog.Error("Error creating topic", slog.Any("error", err))
 	}
 
