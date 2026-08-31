@@ -10,7 +10,7 @@ This project builds on the concepts from my old project [starmie](https://github
 - **Async Producer:** Pushes messages non-blocking to the cluster, handling success and error channels concurrently.
 - **Consumer Group:** Joins the `pokemon-fans` group, reads messages from available partitions, and manages offset commits.
 
-## Quickstart
+## Quick Start
 
 ```bash
 docker compose up -d
