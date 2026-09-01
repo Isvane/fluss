@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -40,7 +41,7 @@ func createTopic(broker string, topicName string, partitions int32, replicationF
 	return nil
 }
 
-func createProducer(broker string) (sarama.AsyncProducer, error) {
+func createProducer(broker string, wg *sync.WaitGroup) (sarama.AsyncProducer, error) {
 	config := sarama.NewConfig()
 
 	config.Producer.Return.Successes = true
@@ -55,7 +56,10 @@ func createProducer(broker string) (sarama.AsyncProducer, error) {
 		os.Exit(1)
 	}
 
+	wg.Add(2)
 	go func() {
+		defer wg.Done()
+
 		for msg := range producer.Successes() {
 			slog.Info("Message sent successfully",
 				slog.String("topic", msg.Topic),
@@ -66,6 +70,8 @@ func createProducer(broker string) (sarama.AsyncProducer, error) {
 	}()
 
 	go func() {
+		defer wg.Done()
+
 		for err := range producer.Errors() {
 			slog.Error("Failed to send message", slog.Any("error", err))
 		}
@@ -105,7 +111,7 @@ func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 	}
 }
 
-func startConsumer(ctx context.Context, broker string, group string, topics []string) (sarama.ConsumerGroup, error) {
+func startConsumer(ctx context.Context, broker string, group string, topics []string, wg *sync.WaitGroup) (sarama.ConsumerGroup, error) {
 	config := sarama.NewConfig()
 	config.Consumer.Offsets.Initial = sarama.OffsetOldest
 
@@ -117,7 +123,10 @@ func startConsumer(ctx context.Context, broker string, group string, topics []st
 
 	consumer := Consumer{}
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
+
 		for {
 			if err := client.Consume(ctx, topics, &consumer); err != nil {
 				if ctx.Err() != nil {
@@ -135,6 +144,8 @@ func startConsumer(ctx context.Context, broker string, group string, topics []st
 }
 
 func main() {
+	wg := &sync.WaitGroup{}
+
 	group := "pokemon-fans"
 	broker := os.Getenv("BROKER")
 	if broker == "" {
@@ -148,7 +159,7 @@ func main() {
 		slog.Error("Error creating topic", slog.Any("error", err))
 	}
 
-	producer, err := createProducer(broker)
+	producer, err := createProducer(broker, wg)
 	if err != nil {
 		slog.Error("Producer error", slog.Any("error", err))
 		os.Exit(1)
@@ -158,7 +169,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	consumerGroup, err := startConsumer(ctx, broker, group, []string{"Pokemon"})
+	consumerGroup, err := startConsumer(ctx, broker, group, []string{"Pokemon"}, wg)
 	if err != nil {
 		slog.Error("Consumer error", slog.Any("error", err))
 		os.Exit(1)
@@ -212,7 +223,10 @@ func main() {
 	<-sigchan
 
 	slog.Info("Shutting down...")
+
 	cancel()
+	producer.AsyncClose()
+	wg.Wait()
 }
 
 func extractKey(input string) sarama.Encoder {
