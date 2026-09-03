@@ -1,4 +1,4 @@
-# Fluss
+# fluss
 
 A minimal Go project exploring pub/sub message delivery using Apache Kafka.
 
