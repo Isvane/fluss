@@ -102,6 +102,8 @@ func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 				slog.String("topic", message.Topic),
 				slog.Int("partition", int(message.Partition)),
 				slog.Any("offset", message.Offset),
+				slog.String("key", string(message.Key)),
+				slog.String("value", string(message.Value)),
 			)
 
 			session.MarkMessage(message, "")
