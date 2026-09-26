@@ -182,6 +182,8 @@ func main() {
 
 	sigchan := make(chan os.Signal, 1)
 
+	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
+
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
 		fmt.Println("Enter message (or type 'quit' to exit): ")
@@ -221,7 +223,6 @@ func main() {
 		}
 	}()
 
-	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigchan
 
 	slog.Info("Shutting down...")
