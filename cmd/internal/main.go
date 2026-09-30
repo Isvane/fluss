@@ -98,10 +98,17 @@ func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 				return nil
 			}
 
+			headers := make(map[string]string, len(message.Headers))
+
+			for _, header := range message.Headers {
+				headers[string(header.Key)] = string(header.Value)
+			}
+
 			slog.Info("Message claimed",
 				slog.String("topic", message.Topic),
 				slog.Int("partition", int(message.Partition)),
 				slog.Any("offset", message.Offset),
+				slog.Any("headers", headers),
 				slog.String("key", string(message.Key)),
 				slog.String("value", string(message.Value)),
 			)
@@ -209,6 +216,12 @@ func main() {
 				Topic: "Pokemon",
 				Key:   key,
 				Value: sarama.StringEncoder(input),
+				Headers: []sarama.RecordHeader{
+					{
+						Key:   []byte("header-key-test"),
+						Value: []byte("header-value-test"),
+					},
+				},
 			}
 
 			producer.Input() <- msg
