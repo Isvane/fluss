@@ -154,6 +154,11 @@ func startConsumer(ctx context.Context, broker string, group string, topics []st
 }
 
 func main() {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown-host"
+	}
+
 	wg := &sync.WaitGroup{}
 
 	group := "pokemon-fans"
@@ -220,8 +225,8 @@ func main() {
 				Value:     sarama.StringEncoder(input),
 				Headers: []sarama.RecordHeader{
 					{
-						Key:   []byte("header-key-test"),
-						Value: []byte("header-value-test"),
+						Key:   []byte("producer-host"),
+						Value: []byte(hostname),
 					},
 				},
 			}
