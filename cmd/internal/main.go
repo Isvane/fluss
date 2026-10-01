@@ -106,6 +106,7 @@ func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 
 			slog.Info("Message claimed",
 				slog.String("topic", message.Topic),
+				slog.Time("timestamp", message.Timestamp),
 				slog.Int("partition", int(message.Partition)),
 				slog.Any("offset", message.Offset),
 				slog.Any("headers", headers),
@@ -213,9 +214,10 @@ func main() {
 			key := extractKey(input)
 
 			msg := &sarama.ProducerMessage{
-				Topic: "Pokemon",
-				Key:   key,
-				Value: sarama.StringEncoder(input),
+				Topic:     "Pokemon",
+				Timestamp: time.Now(),
+				Key:       key,
+				Value:     sarama.StringEncoder(input),
 				Headers: []sarama.RecordHeader{
 					{
 						Key:   []byte("header-key-test"),
