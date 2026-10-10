@@ -14,4 +14,6 @@ This project builds on the concepts from my old project [starmie](https://github
 
 ```bash
 docker compose up -d
+
+docker attach fluss
 ```
