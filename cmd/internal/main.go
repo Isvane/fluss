@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -13,7 +14,42 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func initDB(ctx context.Context, connStr string) (*pgxpool.Pool, error) {
+	pool, err := pgxpool.New(ctx, connStr)
+	if err != nil {
+		return nil, fmt.Errorf("unable to create connection pool: %w", err)
+	}
+
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("unable to ping database: %w", err)
+	}
+
+	schema := `
+	CREATE TABLE IF NOT EXISTS kafka_messages (
+		id BIGSERIAL PRIMARY KEY,
+		topic TEXT NOT NULL,
+		partition INT NOT NULL,
+		kafka_offset BIGINT NOT NULL,
+		msg_key TEXT,
+		msg_value TEXT NOT NULL,
+		headers JSONB,
+		msg_timestamp TIMESTAMPTZ NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		UNIQUE (topic, partition, kafka_offset)
+	);`
+
+	if _, err := pool.Exec(ctx, schema); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("failed to initialize schema: %w", err)
+	}
+
+	slog.Info("Connected to PostgreSQL and ensured schema exists")
+	return pool, nil
+}
 
 func createTopic(broker string, topicName string, partitions int32, replicationFactor int16) error {
 	config := sarama.NewConfig()
@@ -52,8 +88,7 @@ func createProducer(broker string, wg *sync.WaitGroup) (sarama.AsyncProducer, er
 
 	producer, err := sarama.NewAsyncProducer([]string{broker}, config)
 	if err != nil {
-		slog.Error("Error creating producer", slog.Any("error", err))
-		os.Exit(1)
+		return nil, fmt.Errorf("error creating producer: %w", err)
 	}
 
 	wg.Add(2)
@@ -80,7 +115,9 @@ func createProducer(broker string, wg *sync.WaitGroup) (sarama.AsyncProducer, er
 	return producer, nil
 }
 
-type Consumer struct{}
+type Consumer struct {
+	db *pgxpool.Pool
+}
 
 func (c *Consumer) Setup(sarama.ConsumerGroupSession) error {
 	return nil
@@ -91,6 +128,11 @@ func (c *Consumer) Cleanup(sarama.ConsumerGroupSession) error {
 }
 
 func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	const insertQuery = `
+		INSERT INTO kafka_messages (topic, partition, kafka_offset, msg_key, msg_value, headers, msg_timestamp)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (topic, partition, kafka_offset) DO NOTHING;`
+
 	for {
 		select {
 		case message, ok := <-claim.Messages():
@@ -99,17 +141,40 @@ func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 			}
 
 			headers := make(map[string]string, len(message.Headers))
-
 			for _, header := range message.Headers {
 				headers[string(header.Key)] = string(header.Value)
 			}
+			headersJSON, _ := json.Marshal(headers)
 
-			slog.Info("Message claimed",
+			var msgKey *string
+			if message.Key != nil {
+				k := string(message.Key)
+				msgKey = &k
+			}
+
+			_, err := c.db.Exec(
+				session.Context(),
+				insertQuery,
+				message.Topic,
+				message.Partition,
+				message.Offset,
+				msgKey,
+				string(message.Value),
+				headersJSON,
+				message.Timestamp,
+			)
+			if err != nil {
+				slog.Error("Failed to persist message to Postgres",
+					slog.Any("error", err),
+					slog.Int64("offset", message.Offset),
+				)
+				continue
+			}
+
+			slog.Info("Message persisted to DB",
 				slog.String("topic", message.Topic),
-				slog.Time("timestamp", message.Timestamp),
 				slog.Int("partition", int(message.Partition)),
-				slog.Any("offset", message.Offset),
-				slog.Any("headers", headers),
+				slog.Int64("offset", message.Offset),
 				slog.String("key", string(message.Key)),
 				slog.String("value", string(message.Value)),
 			)
@@ -121,17 +186,16 @@ func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 	}
 }
 
-func startConsumer(ctx context.Context, broker string, group string, topics []string, wg *sync.WaitGroup) (sarama.ConsumerGroup, error) {
+func startConsumer(ctx context.Context, broker string, group string, topics []string, db *pgxpool.Pool, wg *sync.WaitGroup) (sarama.ConsumerGroup, error) {
 	config := sarama.NewConfig()
 	config.Consumer.Offsets.Initial = sarama.OffsetOldest
 
 	client, err := sarama.NewConsumerGroup([]string{broker}, group, config)
 	if err != nil {
-		slog.Error("Error creating consumer group client", slog.Any("error", err))
 		return nil, fmt.Errorf("error creating consumer group client: %w", err)
 	}
 
-	consumer := Consumer{}
+	consumer := Consumer{db: db}
 
 	wg.Add(1)
 	go func() {
@@ -159,6 +223,21 @@ func main() {
 		hostname = "unknown-host"
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://fluss:fluss_secret@postgres:5432/pokemon_db?sslmode=disable"
+	}
+
+	dbPool, err := initDB(ctx, dbURL)
+	if err != nil {
+		slog.Error("Database initialization failed", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer dbPool.Close()
+
 	wg := &sync.WaitGroup{}
 
 	group := "pokemon-fans"
@@ -168,7 +247,6 @@ func main() {
 	}
 
 	slog.Info("Configured to connect to Kafka", slog.String("broker", broker))
-	time.Sleep(10 * time.Second)
 
 	if err := createTopic(broker, "Pokemon", 3, 1); err != nil {
 		slog.Error("Error creating topic", slog.Any("error", err))
@@ -179,12 +257,8 @@ func main() {
 		slog.Error("Producer error", slog.Any("error", err))
 		os.Exit(1)
 	}
-	defer producer.AsyncClose()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	consumerGroup, err := startConsumer(ctx, broker, group, []string{"Pokemon"}, wg)
+	consumerGroup, err := startConsumer(ctx, broker, group, []string{"Pokemon"}, dbPool, wg)
 	if err != nil {
 		slog.Error("Consumer error", slog.Any("error", err))
 		os.Exit(1)
@@ -194,7 +268,6 @@ func main() {
 	slog.Info("Sarama consumer up and running...")
 
 	sigchan := make(chan os.Signal, 1)
-
 	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {

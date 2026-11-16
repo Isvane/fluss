@@ -20,14 +20,38 @@ services:
       retries: 10
       start_period: 15s
 
+  postgres:
+    image: postgres:alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=fluss
+      - POSTGRES_PASSWORD=fluss_secret
+      - POSTGRES_DB=pokemon_db
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fluss -d pokemon_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   fluss-app:
     build: .
     container_name: fluss
     environment:
-      - KAFKA_BROKER=kafka:9092
+      - BROKER=kafka:9092
+      - DATABASE_URL=postgres://fluss:fluss_secret@postgres:5432/pokemon_db?sslmode=disable
     stdin_open: true
     tty: true
     depends_on:
       kafka:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  pgdata:
